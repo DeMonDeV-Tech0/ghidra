@@ -1,0 +1,153 @@
+name: Sync Ghidra Releases
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  sync-releases:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Sync tags from official repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          git clone --bare https://github.com/NationalSecurityAgency/ghidra.git ghidra.git
+          cd ghidra.git
+
+          git push --force --tags \
+            https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
+
+      - name: Sync releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -e
+
+          SOURCE="NationalSecurityAgency/ghidra"
+          TARGET="${GITHUB_REPOSITORY}"
+
+          echo "Source : $SOURCE"
+          echo "Target : $TARGET"
+
+          mkdir -p /tmp/releases
+
+          gh api --paginate --slurp \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${SOURCE}/releases?per_page=100" \
+            > /tmp/releases.json
+
+          jq -c '.[][] | select(.draft == false)' /tmp/releases.json |
+          while read -r release; do
+
+            TAG=$(echo "$release" | jq -r '.tag_name')
+            NAME=$(echo "$release" | jq -r '.name')
+            BODY=$(echo "$release" | jq -r '.body // ""')
+            PRERELEASE=$(echo "$release" | jq -r '.prerelease')
+            ASSET_COUNT=$(echo "$release" | jq '.assets | length')
+
+            echo ""
+            echo "===================================="
+            echo "Release: $TAG"
+            echo "Assets : $ASSET_COUNT"
+            echo "===================================="
+
+            EXISTING=$(gh api \
+              "/repos/${TARGET}/releases/tags/${TAG}" \
+              2>/dev/null || true)
+
+            if [ -n "$EXISTING" ]; then
+              echo "Release $TAG existe déjà."
+
+              echo "$release" |
+              jq -c '.assets[]?' |
+              while read -r asset; do
+
+                ASSET_NAME=$(echo "$asset" | jq -r '.name')
+
+                TARGET_ASSET=$(echo "$EXISTING" |
+                  jq -r --arg name "$ASSET_NAME" \
+                  '.assets[]? | select(.name == $name) | .id')
+
+                if [ -n "$TARGET_ASSET" ]; then
+                  echo "Asset déjà présent : $ASSET_NAME"
+                  continue
+                fi
+
+                DOWNLOAD_URL=$(echo "$asset" | jq -r '.browser_download_url')
+
+                echo "Téléchargement : $ASSET_NAME"
+
+                curl -fL \
+                  -H "Accept: application/octet-stream" \
+                  "$DOWNLOAD_URL" \
+                  -o "/tmp/releases/$ASSET_NAME"
+
+                echo "Upload : $ASSET_NAME"
+
+                gh release upload "$TAG" \
+                  "/tmp/releases/$ASSET_NAME" \
+                  --repo "$TARGET"
+
+                rm -f "/tmp/releases/$ASSET_NAME"
+              done
+
+              continue
+            fi
+
+            echo "Création de la Release $TAG"
+
+            if [ "$PRERELEASE" = "true" ]; then
+              gh release create "$TAG" \
+                --repo "$TARGET" \
+                --title "$NAME" \
+                --notes "$BODY" \
+                --prerelease \
+                --verify-tag
+            else
+              gh release create "$TAG" \
+                --repo "$TARGET" \
+                --title "$NAME" \
+                --notes "$BODY" \
+                --verify-tag
+            fi
+
+            echo "Release créée."
+
+            echo "$release" |
+            jq -c '.assets[]?' |
+            while read -r asset; do
+
+              ASSET_NAME=$(echo "$asset" | jq -r '.name')
+              DOWNLOAD_URL=$(echo "$asset" | jq -r '.browser_download_url')
+
+              echo "Téléchargement : $ASSET_NAME"
+
+              curl -fL \
+                -H "Accept: application/octet-stream" \
+                "$DOWNLOAD_URL" \
+                -o "/tmp/releases/$ASSET_NAME"
+
+              echo "Upload : $ASSET_NAME"
+
+              gh release upload "$TAG" \
+                "/tmp/releases/$ASSET_NAME" \
+                --repo "$TARGET"
+
+              rm -f "/tmp/releases/$ASSET_NAME"
+            done
+
+          done
+
+          echo ""
+          echo "===================================="
+          echo "Synchronisation terminée."
+          echo "===================================="
