@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ghidra-release-sync
+  cancel-in-progress: false
+
 jobs:
   sync-releases:
     runs-on: ubuntu-latest
@@ -19,11 +23,20 @@ jobs:
         run: |
           set -e
 
-          git clone --bare https://github.com/NationalSecurityAgency/ghidra.git ghidra.git
+          echo "===================================="
+          echo "Synchronisation des tags"
+          echo "===================================="
+
+          git clone --bare \
+            https://github.com/NationalSecurityAgency/ghidra.git \
+            ghidra.git
+
           cd ghidra.git
 
           git push --force --tags \
             https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
+
+          echo "Tags synchronisés."
 
       - name: Sync releases
         env:
@@ -35,15 +48,60 @@ jobs:
           SOURCE="NationalSecurityAgency/ghidra"
           TARGET="${GITHUB_REPOSITORY}"
 
+          echo "===================================="
+          echo "Synchronisation des Releases"
+          echo "===================================="
           echo "Source : $SOURCE"
           echo "Target : $TARGET"
+          echo ""
 
           mkdir -p /tmp/releases
 
+          echo "Récupération des Releases officielles..."
+
           gh api --paginate --slurp \
             -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
             "/repos/${SOURCE}/releases?per_page=100" \
             > /tmp/releases.json
+
+          RELEASE_COUNT=$(jq '[.[][] | select(.draft == false)] | length' /tmp/releases.json)
+
+          echo "Releases trouvées : $RELEASE_COUNT"
+          echo ""
+
+          upload_asset() {
+            local release_json="$1"
+            local asset_name="$2"
+            local asset_file="$3"
+
+            local release_id
+            local upload_url
+            local encoded_name
+
+            release_id=$(echo "$release_json" | jq -r '.id')
+            upload_url=$(echo "$release_json" | jq -r '.upload_url' | sed 's/{?name,label}//')
+
+            encoded_name=$(printf '%s' "$asset_name" | jq -sRr @uri)
+
+            echo "Release ID : $release_id"
+            echo "Upload URL : $upload_url"
+            echo "Upload : $asset_name"
+
+            curl -fL \
+              --retry 3 \
+              --retry-delay 5 \
+              -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@${asset_file}" \
+              "${upload_url}?name=${encoded_name}"
+
+            echo ""
+            echo "Upload terminé : $asset_name"
+          }
 
           jq -c '.[][] | select(.draft == false)' /tmp/releases.json |
           while read -r release; do
@@ -56,15 +114,19 @@ jobs:
 
             echo ""
             echo "===================================="
-            echo "Release: $TAG"
-            echo "Assets : $ASSET_COUNT"
+            echo "Release : $TAG"
+            echo "Nom     : $NAME"
+            echo "Assets  : $ASSET_COUNT"
             echo "===================================="
 
             EXISTING=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
               "/repos/${TARGET}/releases/tags/${TAG}" \
               2>/dev/null || true)
 
             if [ -n "$EXISTING" ]; then
+
               echo "Release $TAG existe déjà."
 
               echo "$release" |
@@ -72,6 +134,10 @@ jobs:
               while read -r asset; do
 
                 ASSET_NAME=$(echo "$asset" | jq -r '.name')
+                DOWNLOAD_URL=$(echo "$asset" | jq -r '.browser_download_url')
+
+                echo ""
+                echo "Asset : $ASSET_NAME"
 
                 TARGET_ASSET=$(echo "$EXISTING" |
                   jq -r --arg name "$ASSET_NAME" \
@@ -82,45 +148,60 @@ jobs:
                   continue
                 fi
 
-                DOWNLOAD_URL=$(echo "$asset" | jq -r '.browser_download_url')
+                FILE="/tmp/releases/$ASSET_NAME"
 
                 echo "Téléchargement : $ASSET_NAME"
 
                 curl -fL \
-                  -H "Accept: application/octet-stream" \
+                  --retry 3 \
+                  --retry-delay 5 \
                   "$DOWNLOAD_URL" \
-                  -o "/tmp/releases/$ASSET_NAME"
+                  -o "$FILE"
 
-                echo "Upload : $ASSET_NAME"
+                echo "Téléchargement terminé."
 
-                gh release upload "$TAG" \
-                  "/tmp/releases/$ASSET_NAME" \
-                  --repo "$TARGET"
+                upload_asset \
+                  "$EXISTING" \
+                  "$ASSET_NAME" \
+                  "$FILE"
 
-                rm -f "/tmp/releases/$ASSET_NAME"
+                rm -f "$FILE"
+
               done
 
               continue
             fi
 
-            echo "Création de la Release $TAG"
+            echo "Release $TAG absente."
+            echo "Création de la Release..."
 
             if [ "$PRERELEASE" = "true" ]; then
+
               gh release create "$TAG" \
                 --repo "$TARGET" \
                 --title "$NAME" \
                 --notes "$BODY" \
                 --prerelease \
                 --verify-tag
+
             else
+
               gh release create "$TAG" \
                 --repo "$TARGET" \
                 --title "$NAME" \
                 --notes "$BODY" \
                 --verify-tag
+
             fi
 
             echo "Release créée."
+
+            echo "Récupération de la Release créée..."
+
+            EXISTING=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/${TARGET}/releases/tags/${TAG}")
 
             echo "$release" |
             jq -c '.assets[]?' |
@@ -129,23 +210,34 @@ jobs:
               ASSET_NAME=$(echo "$asset" | jq -r '.name')
               DOWNLOAD_URL=$(echo "$asset" | jq -r '.browser_download_url')
 
+              FILE="/tmp/releases/$ASSET_NAME"
+
+              echo ""
               echo "Téléchargement : $ASSET_NAME"
 
               curl -fL \
-                -H "Accept: application/octet-stream" \
+                --retry 3 \
+                --retry-delay 5 \
                 "$DOWNLOAD_URL" \
-                -o "/tmp/releases/$ASSET_NAME"
+                -o "$FILE"
 
-              echo "Upload : $ASSET_NAME"
+              echo "Téléchargement terminé."
 
-              gh release upload "$TAG" \
-                "/tmp/releases/$ASSET_NAME" \
-                --repo "$TARGET"
+              upload_asset \
+                "$EXISTING" \
+                "$ASSET_NAME" \
+                "$FILE"
 
-              rm -f "/tmp/releases/$ASSET_NAME"
+              rm -f "$FILE"
+
             done
 
+            echo "Release $TAG synchronisée."
+
           done
+
+          rm -rf /tmp/releases
+          rm -f /tmp/releases.json
 
           echo ""
           echo "===================================="
