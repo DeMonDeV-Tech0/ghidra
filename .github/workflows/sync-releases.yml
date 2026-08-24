@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # ============================================================
       # 1. SYNCHRONISATION DES TAGS
       # ============================================================
@@ -54,6 +55,7 @@ jobs:
           echo ""
           echo "Tags synchronisés."
 
+
       # ============================================================
       # 2. SYNCHRONISATION DES RELEASES
       # ============================================================
@@ -80,6 +82,7 @@ jobs:
           rm -rf /tmp/releases
           mkdir -p /tmp/releases
 
+
           # ========================================================
           # Récupération de toutes les releases officielles
           # ========================================================
@@ -99,6 +102,7 @@ jobs:
 
           echo "Releases trouvées : $RELEASE_COUNT"
           echo ""
+
 
           # ========================================================
           # Récupération du VRAI Latest officiel
@@ -122,6 +126,7 @@ jobs:
           echo "Latest officiel : $LATEST_TAG"
           echo ""
 
+
           # ========================================================
           # Fonction : récupérer une release du fork
           # ========================================================
@@ -134,6 +139,54 @@ jobs:
               --json databaseId,name,tagName,uploadUrl,assets \
               2>/dev/null || true
           }
+
+
+          # ========================================================
+          # Fonction : vérifier DIRECTEMENT si l'asset existe
+          # ========================================================
+
+          target_asset_exists() {
+            local release_id="$1"
+            local asset_name="$2"
+
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/${TARGET}/releases/${release_id}/assets?per_page=100" \
+              --jq \
+                --arg name "$asset_name" \
+                '.[] | select(.name == $name) | .id' \
+              2>/dev/null || true
+          }
+
+
+          # ========================================================
+          # Fonction : supprimer un asset existant si nécessaire
+          # ========================================================
+
+          delete_target_asset() {
+            local asset_id="$1"
+            local asset_name="$2"
+
+            if [ -z "$asset_id" ] || [ "$asset_id" = "null" ]; then
+              return 0
+            fi
+
+            echo ""
+            echo "Asset déjà présent sur GitHub."
+            echo "Asset ID : $asset_id"
+            echo "Nom      : $asset_name"
+            echo "Suppression de l'ancien asset..."
+
+            gh api \
+              --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/${TARGET}/releases/assets/${asset_id}"
+
+            echo "Ancien asset supprimé."
+          }
+
 
           # ========================================================
           # Fonction : upload d'un asset
@@ -189,6 +242,7 @@ jobs:
             echo "Upload terminé : $asset_name"
           }
 
+
           # ========================================================
           # Parcours des releases officielles
           # ========================================================
@@ -208,6 +262,7 @@ jobs:
             echo "Nom     : $NAME"
             echo "Assets  : $ASSET_COUNT"
             echo "===================================="
+
 
             # ======================================================
             # Vérification de l'existence sur le fork
@@ -255,6 +310,7 @@ jobs:
 
               echo "Release créée."
 
+
               # ====================================================
               # Récupération de la Release nouvellement créée
               # ====================================================
@@ -281,6 +337,7 @@ jobs:
 
             fi
 
+
             # ======================================================
             # Synchronisation des assets
             # ======================================================
@@ -292,6 +349,7 @@ jobs:
 
             echo ""
             echo "Vérification des assets..."
+
 
             echo "$release" |
             jq -c '.assets[]?' |
@@ -305,17 +363,15 @@ jobs:
               echo "Asset : $ASSET_NAME"
               echo "------------------------------------"
 
+
               # ====================================================
-              # Vérifie si l'asset existe déjà sur le fork
+              # Vérification DIRECTE sur GitHub
               # ====================================================
 
               TARGET_ASSET=$(
-                echo "$EXISTING" |
-                jq -r \
-                  --arg name "$ASSET_NAME" \
-                  '.assets[]? |
-                   select(.name == $name) |
-                   .databaseId'
+                target_asset_exists \
+                  "$TARGET_ID" \
+                  "$ASSET_NAME"
               )
 
               if [ -n "$TARGET_ASSET" ] &&
@@ -327,6 +383,7 @@ jobs:
 
                 continue
               fi
+
 
               # ====================================================
               # Asset absent : téléchargement
@@ -348,6 +405,7 @@ jobs:
               echo ""
               echo "Téléchargement terminé."
 
+
               # ====================================================
               # Vérification du fichier
               # ====================================================
@@ -362,6 +420,31 @@ jobs:
 
               echo "Taille : $FILE_SIZE octets"
 
+
+              # ====================================================
+              # DERNIÈRE vérification avant upload
+              # ====================================================
+
+              CURRENT_TARGET_ASSET=$(
+                target_asset_exists \
+                  "$TARGET_ID" \
+                  "$ASSET_NAME"
+              )
+
+              if [ -n "$CURRENT_TARGET_ASSET" ] &&
+                 [ "$CURRENT_TARGET_ASSET" != "null" ]; then
+
+                echo ""
+                echo "L'asset existe maintenant sur le dépôt cible."
+                echo "ID asset : $CURRENT_TARGET_ASSET"
+                echo "Suppression de l'ancien asset avant réupload."
+
+                delete_target_asset \
+                  "$CURRENT_TARGET_ASSET" \
+                  "$ASSET_NAME"
+              fi
+
+
               # ====================================================
               # Upload vers le fork
               # ====================================================
@@ -370,6 +453,7 @@ jobs:
                 "$TARGET_ID" \
                 "$ASSET_NAME" \
                 "$FILE"
+
 
               # ====================================================
               # Nettoyage
@@ -387,6 +471,7 @@ jobs:
 
           done
 
+
           # ========================================================
           # 3. FORCER LE LATEST À ÊTRE IDENTIQUE À L'OFFICIEL
           # ========================================================
@@ -398,7 +483,9 @@ jobs:
           echo "Latest officiel : $LATEST_TAG"
           echo ""
 
-          # Vérifie que la release Latest existe bien sur le fork
+
+          # Vérifie que la release existe bien sur le fork
+
           LATEST_TARGET=$(
             get_target_release "$LATEST_TAG"
           )
@@ -412,6 +499,7 @@ jobs:
             exit 1
           fi
 
+
           echo "Marquage de $LATEST_TAG comme Latest..."
 
           gh release edit "$LATEST_TAG" \
@@ -420,6 +508,7 @@ jobs:
 
           echo ""
           echo "Latest synchronisé : $LATEST_TAG"
+
 
           # ========================================================
           # Nettoyage final
