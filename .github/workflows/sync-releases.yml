@@ -36,6 +36,9 @@ jobs:
           git push --force --tags \
             https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
 
+          cd ..
+
+          echo ""
           echo "Tags synchronisés."
 
       - name: Sync releases
@@ -44,6 +47,7 @@ jobs:
         shell: bash
         run: |
           set -e
+          set -o pipefail
 
           SOURCE="NationalSecurityAgency/ghidra"
           TARGET="${GITHUB_REPOSITORY}"
@@ -75,16 +79,19 @@ jobs:
             local asset_name="$2"
             local asset_file="$3"
 
-            local release_id
             local upload_url
             local encoded_name
 
-            release_id=$(echo "$release_json" | jq -r '.id')
-            upload_url=$(echo "$release_json" | jq -r '.upload_url' | sed 's/{?name,label}//')
+            upload_url=$(echo "$release_json" | jq -r '.uploadUrl')
+
+            if [ -z "$upload_url" ] || [ "$upload_url" = "null" ]; then
+              echo "ERREUR : uploadUrl introuvable."
+              echo "$release_json"
+              return 1
+            fi
 
             encoded_name=$(printf '%s' "$asset_name" | jq -sRr @uri)
 
-            echo "Release ID : $release_id"
             echo "Upload URL : $upload_url"
             echo "Upload : $asset_name"
 
@@ -103,6 +110,15 @@ jobs:
             echo "Upload terminé : $asset_name"
           }
 
+          get_target_release() {
+            local tag="$1"
+
+            gh release view "$tag" \
+              --repo "$TARGET" \
+              --json databaseId,name,tagName,uploadUrl,assets \
+              2>/dev/null || true
+          }
+
           jq -c '.[][] | select(.draft == false)' /tmp/releases.json |
           while read -r release; do
 
@@ -119,15 +135,16 @@ jobs:
             echo "Assets  : $ASSET_COUNT"
             echo "===================================="
 
-            EXISTING=$(gh api \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "/repos/${TARGET}/releases/tags/${TAG}" \
-              2>/dev/null || true)
+            EXISTING=$(get_target_release "$TAG")
 
-            if [ -n "$EXISTING" ]; then
+            if [ -n "$EXISTING" ] && \
+               echo "$EXISTING" | jq -e '.databaseId != null' >/dev/null 2>&1; then
 
               echo "Release $TAG existe déjà."
+
+              TARGET_ID=$(echo "$EXISTING" | jq -r '.databaseId')
+
+              echo "Release ID cible : $TARGET_ID"
 
               echo "$release" |
               jq -c '.assets[]?' |
@@ -141,9 +158,9 @@ jobs:
 
                 TARGET_ASSET=$(echo "$EXISTING" |
                   jq -r --arg name "$ASSET_NAME" \
-                  '.assets[]? | select(.name == $name) | .id')
+                  '.assets[]? | select(.name == $name) | .databaseId')
 
-                if [ -n "$TARGET_ASSET" ]; then
+                if [ -n "$TARGET_ASSET" ] && [ "$TARGET_ASSET" != "null" ]; then
                   echo "Asset déjà présent : $ASSET_NAME"
                   continue
                 fi
@@ -198,10 +215,22 @@ jobs:
 
             echo "Récupération de la Release créée..."
 
-            EXISTING=$(gh api \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "/repos/${TARGET}/releases/tags/${TAG}")
+            EXISTING=$(get_target_release "$TAG")
+
+            if [ -z "$EXISTING" ]; then
+              echo "ERREUR : impossible de récupérer la Release $TAG après création."
+              exit 1
+            fi
+
+            if ! echo "$EXISTING" | jq -e '.databaseId != null' >/dev/null 2>&1; then
+              echo "ERREUR : databaseId absent de la Release $TAG."
+              echo "$EXISTING"
+              exit 1
+            fi
+
+            TARGET_ID=$(echo "$EXISTING" | jq -r '.databaseId')
+
+            echo "Release ID cible : $TARGET_ID"
 
             echo "$release" |
             jq -c '.assets[]?' |
