@@ -17,29 +17,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ============================================================
+      # 1. SYNCHRONISATION DES TAGS
+      # ============================================================
+
       - name: Sync tags from official repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           set -e
+          set -o pipefail
+
+          SOURCE_REPO="https://github.com/NationalSecurityAgency/ghidra.git"
+          TARGET_REPO="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           echo "===================================="
           echo "Synchronisation des tags"
           echo "===================================="
+          echo "Source : $SOURCE_REPO"
+          echo "Target : $GITHUB_REPOSITORY"
+          echo ""
 
-          git clone --bare \
-            https://github.com/NationalSecurityAgency/ghidra.git \
-            ghidra.git
+          rm -rf ghidra.git
+
+          git clone --bare "$SOURCE_REPO" ghidra.git
 
           cd ghidra.git
 
-          git push --force --tags \
-            https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
+          git push --force --tags "$TARGET_REPO"
 
           cd ..
 
+          rm -rf ghidra.git
+
           echo ""
           echo "Tags synchronisés."
+
+      # ============================================================
+      # 2. SYNCHRONISATION DES RELEASES
+      # ============================================================
 
       - name: Sync releases
         env:
@@ -52,6 +69,7 @@ jobs:
           SOURCE="NationalSecurityAgency/ghidra"
           TARGET="${GITHUB_REPOSITORY}"
 
+          echo ""
           echo "===================================="
           echo "Synchronisation des Releases"
           echo "===================================="
@@ -59,7 +77,12 @@ jobs:
           echo "Target : $TARGET"
           echo ""
 
+          rm -rf /tmp/releases
           mkdir -p /tmp/releases
+
+          # ========================================================
+          # Récupération de toutes les releases officielles
+          # ========================================================
 
           echo "Récupération des Releases officielles..."
 
@@ -69,35 +92,76 @@ jobs:
             "/repos/${SOURCE}/releases?per_page=100" \
             > /tmp/releases.json
 
-          RELEASE_COUNT=$(jq '[.[][] | select(.draft == false)] | length' /tmp/releases.json)
+          RELEASE_COUNT=$(
+            jq '[.[][] | select(.draft == false)] | length' \
+            /tmp/releases.json
+          )
 
           echo "Releases trouvées : $RELEASE_COUNT"
           echo ""
 
+          # ========================================================
+          # Fonction : récupérer une release du fork
+          # ========================================================
+
+          get_target_release() {
+            local tag="$1"
+
+            gh release view "$tag" \
+              --repo "$TARGET" \
+              --json databaseId,name,tagName,uploadUrl,assets \
+              2>/dev/null || true
+          }
+
+          # ========================================================
+          # Fonction : upload d'un asset
+          # ========================================================
+
           upload_asset() {
-            local release_json="$1"
+            local release_id="$1"
             local asset_name="$2"
             local asset_file="$3"
 
-            local upload_url
-            local encoded_name
-
-            upload_url=$(echo "$release_json" | jq -r '.uploadUrl')
-
-            if [ -z "$upload_url" ] || [ "$upload_url" = "null" ]; then
-              echo "ERREUR : uploadUrl introuvable."
-              echo "$release_json"
+            if [ -z "$release_id" ] || [ "$release_id" = "null" ]; then
+              echo "ERREUR : release_id invalide."
+              echo "release_id = $release_id"
               return 1
             fi
 
+            if [ ! -f "$asset_file" ]; then
+              echo "ERREUR : fichier introuvable."
+              echo "fichier = $asset_file"
+              return 1
+            fi
+
+            local encoded_name
+            local upload_url
+
             encoded_name=$(printf '%s' "$asset_name" | jq -sRr @uri)
 
+            upload_url="https://uploads.github.com/repos/${TARGET}/releases/${release_id}/assets"
+
+            echo ""
+            echo "------------------------------------"
+            echo "Upload de l'asset"
+            echo "------------------------------------"
+            echo "Release ID : $release_id"
+            echo "Asset      : $asset_name"
+            echo "Fichier    : $asset_file"
             echo "Upload URL : $upload_url"
-            echo "Upload : $asset_name"
+            echo ""
+
+            # GitHub attend le fichier binaire directement.
+            # L'URL finale est :
+            #
+            # https://uploads.github.com/repos/OWNER/REPO/
+            # releases/RELEASE_ID/assets?name=FILE
+            #
 
             curl -fL \
               --retry 3 \
               --retry-delay 5 \
+              --retry-all-errors \
               -X POST \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
@@ -110,14 +174,9 @@ jobs:
             echo "Upload terminé : $asset_name"
           }
 
-          get_target_release() {
-            local tag="$1"
-
-            gh release view "$tag" \
-              --repo "$TARGET" \
-              --json databaseId,name,tagName,uploadUrl,assets \
-              2>/dev/null || true
-          }
+          # ========================================================
+          # Parcours des releases officielles
+          # ========================================================
 
           jq -c '.[][] | select(.draft == false)' /tmp/releases.json |
           while read -r release; do
@@ -135,10 +194,15 @@ jobs:
             echo "Assets  : $ASSET_COUNT"
             echo "===================================="
 
+            # ======================================================
+            # Vérification de l'existence sur le fork
+            # ======================================================
+
             EXISTING=$(get_target_release "$TAG")
 
             if [ -n "$EXISTING" ] && \
-               echo "$EXISTING" | jq -e '.databaseId != null' >/dev/null 2>&1; then
+               echo "$EXISTING" |
+               jq -e '.databaseId != null' >/dev/null 2>&1; then
 
               echo "Release $TAG existe déjà."
 
@@ -146,91 +210,73 @@ jobs:
 
               echo "Release ID cible : $TARGET_ID"
 
-              echo "$release" |
-              jq -c '.assets[]?' |
-              while read -r asset; do
+            else
 
-                ASSET_NAME=$(echo "$asset" | jq -r '.name')
-                DOWNLOAD_URL=$(echo "$asset" | jq -r '.browser_download_url')
+              # ====================================================
+              # Release absente : création
+              # ====================================================
 
-                echo ""
-                echo "Asset : $ASSET_NAME"
+              echo "Release $TAG absente."
+              echo "Création de la Release..."
 
-                TARGET_ASSET=$(echo "$EXISTING" |
-                  jq -r --arg name "$ASSET_NAME" \
-                  '.assets[]? | select(.name == $name) | .databaseId')
+              if [ "$PRERELEASE" = "true" ]; then
 
-                if [ -n "$TARGET_ASSET" ] && [ "$TARGET_ASSET" != "null" ]; then
-                  echo "Asset déjà présent : $ASSET_NAME"
-                  continue
-                fi
+                gh release create "$TAG" \
+                  --repo "$TARGET" \
+                  --title "$NAME" \
+                  --notes "$BODY" \
+                  --prerelease \
+                  --verify-tag
 
-                FILE="/tmp/releases/$ASSET_NAME"
+              else
 
-                echo "Téléchargement : $ASSET_NAME"
+                gh release create "$TAG" \
+                  --repo "$TARGET" \
+                  --title "$NAME" \
+                  --notes "$BODY" \
+                  --verify-tag
 
-                curl -fL \
-                  --retry 3 \
-                  --retry-delay 5 \
-                  "$DOWNLOAD_URL" \
-                  -o "$FILE"
+              fi
 
-                echo "Téléchargement terminé."
+              echo "Release créée."
 
-                upload_asset \
-                  "$EXISTING" \
-                  "$ASSET_NAME" \
-                  "$FILE"
+              # ====================================================
+              # Récupération de la Release nouvellement créée
+              # ====================================================
 
-                rm -f "$FILE"
+              EXISTING=$(get_target_release "$TAG")
 
-              done
+              if [ -z "$EXISTING" ]; then
+                echo "ERREUR : impossible de récupérer la Release créée."
+                echo "Tag : $TAG"
+                exit 1
+              fi
 
+              if ! echo "$EXISTING" |
+                jq -e '.databaseId != null' >/dev/null 2>&1; then
+
+                echo "ERREUR : databaseId absent."
+                echo "$EXISTING"
+                exit 1
+              fi
+
+              TARGET_ID=$(echo "$EXISTING" | jq -r '.databaseId')
+
+              echo "Release ID cible : $TARGET_ID"
+
+            fi
+
+            # ======================================================
+            # Synchronisation des assets
+            # ======================================================
+
+            if [ "$ASSET_COUNT" -eq 0 ]; then
+              echo "Aucun asset à synchroniser."
               continue
             fi
 
-            echo "Release $TAG absente."
-            echo "Création de la Release..."
-
-            if [ "$PRERELEASE" = "true" ]; then
-
-              gh release create "$TAG" \
-                --repo "$TARGET" \
-                --title "$NAME" \
-                --notes "$BODY" \
-                --prerelease \
-                --verify-tag
-
-            else
-
-              gh release create "$TAG" \
-                --repo "$TARGET" \
-                --title "$NAME" \
-                --notes "$BODY" \
-                --verify-tag
-
-            fi
-
-            echo "Release créée."
-
-            echo "Récupération de la Release créée..."
-
-            EXISTING=$(get_target_release "$TAG")
-
-            if [ -z "$EXISTING" ]; then
-              echo "ERREUR : impossible de récupérer la Release $TAG après création."
-              exit 1
-            fi
-
-            if ! echo "$EXISTING" | jq -e '.databaseId != null' >/dev/null 2>&1; then
-              echo "ERREUR : databaseId absent de la Release $TAG."
-              echo "$EXISTING"
-              exit 1
-            fi
-
-            TARGET_ID=$(echo "$EXISTING" | jq -r '.databaseId')
-
-            echo "Release ID cible : $TARGET_ID"
+            echo ""
+            echo "Vérification des assets..."
 
             echo "$release" |
             jq -c '.assets[]?' |
@@ -239,31 +285,96 @@ jobs:
               ASSET_NAME=$(echo "$asset" | jq -r '.name')
               DOWNLOAD_URL=$(echo "$asset" | jq -r '.browser_download_url')
 
+              echo ""
+              echo "------------------------------------"
+              echo "Asset : $ASSET_NAME"
+              echo "------------------------------------"
+
+              # ====================================================
+              # Vérifie si l'asset existe déjà sur le fork
+              # ====================================================
+
+              TARGET_ASSET=$(
+                echo "$EXISTING" |
+                jq -r \
+                  --arg name "$ASSET_NAME" \
+                  '.assets[]? |
+                   select(.name == $name) |
+                   .databaseId'
+              )
+
+              if [ -n "$TARGET_ASSET" ] &&
+                 [ "$TARGET_ASSET" != "null" ]; then
+
+                echo "Asset déjà présent."
+                echo "ID asset : $TARGET_ASSET"
+                echo "Aucun téléchargement nécessaire."
+
+                continue
+              fi
+
+              # ====================================================
+              # Asset absent : téléchargement
+              # ====================================================
+
               FILE="/tmp/releases/$ASSET_NAME"
 
-              echo ""
-              echo "Téléchargement : $ASSET_NAME"
+              echo "Asset absent du fork."
+              echo "Téléchargement depuis le dépôt officiel..."
+              echo "URL : $DOWNLOAD_URL"
 
               curl -fL \
                 --retry 3 \
                 --retry-delay 5 \
+                --retry-all-errors \
                 "$DOWNLOAD_URL" \
                 -o "$FILE"
 
+              echo ""
               echo "Téléchargement terminé."
 
+              # ====================================================
+              # Vérification du fichier
+              # ====================================================
+
+              if [ ! -s "$FILE" ]; then
+                echo "ERREUR : fichier téléchargé vide."
+                rm -f "$FILE"
+                exit 1
+              fi
+
+              FILE_SIZE=$(stat -c%s "$FILE")
+
+              echo "Taille : $FILE_SIZE octets"
+
+              # ====================================================
+              # Upload vers le fork
+              # ====================================================
+
               upload_asset \
-                "$EXISTING" \
+                "$TARGET_ID" \
                 "$ASSET_NAME" \
                 "$FILE"
 
+              # ====================================================
+              # Nettoyage
+              # ====================================================
+
               rm -f "$FILE"
+
+              echo ""
+              echo "Asset synchronisé : $ASSET_NAME"
 
             done
 
-            echo "Release $TAG synchronisée."
+            echo ""
+            echo "Release synchronisée : $TAG"
 
           done
+
+          # ========================================================
+          # Nettoyage final
+          # ========================================================
 
           rm -rf /tmp/releases
           rm -f /tmp/releases.json
