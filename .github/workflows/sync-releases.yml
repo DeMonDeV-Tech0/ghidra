@@ -136,55 +136,42 @@ jobs:
 
             gh release view "$tag" \
               --repo "$TARGET" \
-              --json databaseId,name,tagName,uploadUrl,assets \
+              --json databaseId,name,tagName,uploadUrl \
               2>/dev/null || true
           }
 
 
           # ========================================================
-          # Fonction : vérifier DIRECTEMENT si l'asset existe
+          # Fonction : vérifier DIRECTEMENT les assets
+          #
+          # IMPORTANT :
+          # On utilise l'API REST officielle de GitHub.
+          #
+          # Cela évite le problème où gh release view ne permettait
+          # pas de détecter correctement l'asset avant l'upload.
           # ========================================================
 
-          target_asset_exists() {
+          get_target_asset() {
             local release_id="$1"
             local asset_name="$2"
 
             gh api \
+              --paginate \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2026-03-10" \
               "/repos/${TARGET}/releases/${release_id}/assets?per_page=100" \
               --jq \
                 --arg name "$asset_name" \
-                '.[] | select(.name == $name) | .id' \
+                '
+                .[] |
+                select(
+                  (.name | ascii_downcase)
+                  ==
+                  ($name | ascii_downcase)
+                ) |
+                "\(.id)|\(.name)|\(.state)"
+                ' \
               2>/dev/null || true
-          }
-
-
-          # ========================================================
-          # Fonction : supprimer un asset existant si nécessaire
-          # ========================================================
-
-          delete_target_asset() {
-            local asset_id="$1"
-            local asset_name="$2"
-
-            if [ -z "$asset_id" ] || [ "$asset_id" = "null" ]; then
-              return 0
-            fi
-
-            echo ""
-            echo "Asset déjà présent sur GitHub."
-            echo "Asset ID : $asset_id"
-            echo "Nom      : $asset_name"
-            echo "Suppression de l'ancien asset..."
-
-            gh api \
-              --method DELETE \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "/repos/${TARGET}/releases/assets/${asset_id}"
-
-            echo "Ancien asset supprimé."
           }
 
 
@@ -265,7 +252,7 @@ jobs:
 
 
             # ======================================================
-            # Vérification de l'existence sur le fork
+            # Vérification de l'existence de la release
             # ======================================================
 
             EXISTING=$(get_target_release "$TAG")
@@ -281,10 +268,6 @@ jobs:
               echo "Release ID cible : $TARGET_ID"
 
             else
-
-              # ====================================================
-              # Release absente : création
-              # ====================================================
 
               echo "Release $TAG absente."
               echo "Création de la Release..."
@@ -312,7 +295,7 @@ jobs:
 
 
               # ====================================================
-              # Récupération de la Release nouvellement créée
+              # Récupération de la release créée
               # ====================================================
 
               EXISTING=$(get_target_release "$TAG")
@@ -365,35 +348,42 @@ jobs:
 
 
               # ====================================================
-              # Vérification DIRECTE sur GitHub
+              # VÉRIFICATION DIRECTE SUR GITHUB
               # ====================================================
 
               TARGET_ASSET=$(
-                target_asset_exists \
+                get_target_asset \
                   "$TARGET_ID" \
                   "$ASSET_NAME"
               )
 
-              if [ -n "$TARGET_ASSET" ] &&
-                 [ "$TARGET_ASSET" != "null" ]; then
+              if [ -n "$TARGET_ASSET" ]; then
 
-                echo "Asset déjà présent."
-                echo "ID asset : $TARGET_ASSET"
-                echo "Aucun téléchargement nécessaire."
+                TARGET_ASSET_ID=$(echo "$TARGET_ASSET" | cut -d'|' -f1)
+                TARGET_ASSET_NAME=$(echo "$TARGET_ASSET" | cut -d'|' -f2)
+                TARGET_ASSET_STATE=$(echo "$TARGET_ASSET" | cut -d'|' -f3)
+
+                echo "Asset déjà présent sur le dépôt cible."
+                echo "ID    : $TARGET_ASSET_ID"
+                echo "Nom   : $TARGET_ASSET_NAME"
+                echo "État  : $TARGET_ASSET_STATE"
+                echo ""
+                echo "Aucun téléchargement."
+                echo "Aucun upload."
 
                 continue
               fi
 
 
               # ====================================================
-              # Asset absent : téléchargement
+              # ASSET ABSENT
               # ====================================================
 
-              FILE="/tmp/releases/$ASSET_NAME"
-
-              echo "Asset absent du fork."
+              echo "Asset absent du dépôt cible."
               echo "Téléchargement depuis le dépôt officiel..."
               echo "URL : $DOWNLOAD_URL"
+
+              FILE="/tmp/releases/$ASSET_NAME"
 
               curl -fL \
                 --retry 3 \
@@ -422,26 +412,27 @@ jobs:
 
 
               # ====================================================
-              # DERNIÈRE vérification avant upload
+              # DERNIÈRE VÉRIFICATION AVANT UPLOAD
+              #
+              # Si une autre synchronisation a ajouté l'asset entre
+              # temps, on ne fait surtout PAS l'upload.
               # ====================================================
 
-              CURRENT_TARGET_ASSET=$(
-                target_asset_exists \
+              TARGET_ASSET=$(
+                get_target_asset \
                   "$TARGET_ID" \
                   "$ASSET_NAME"
               )
 
-              if [ -n "$CURRENT_TARGET_ASSET" ] &&
-                 [ "$CURRENT_TARGET_ASSET" != "null" ]; then
+              if [ -n "$TARGET_ASSET" ]; then
 
                 echo ""
-                echo "L'asset existe maintenant sur le dépôt cible."
-                echo "ID asset : $CURRENT_TARGET_ASSET"
-                echo "Suppression de l'ancien asset avant réupload."
+                echo "Asset trouvé avant l'upload."
+                echo "Aucun upload nécessaire."
 
-                delete_target_asset \
-                  "$CURRENT_TARGET_ASSET" \
-                  "$ASSET_NAME"
+                rm -f "$FILE"
+
+                continue
               fi
 
 
@@ -484,7 +475,8 @@ jobs:
           echo ""
 
 
-          # Vérifie que la release existe bien sur le fork
+          # La release est forcément passée dans la boucle ci-dessus.
+          # On récupère simplement son ID pour confirmer.
 
           LATEST_TARGET=$(
             get_target_release "$LATEST_TAG"
