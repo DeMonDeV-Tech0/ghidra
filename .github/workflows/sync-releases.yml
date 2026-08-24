@@ -398,7 +398,7 @@ jobs:
           echo "Latest officiel : $LATEST_TAG"
           echo ""
 
-          # Vérifie que la release existe bien sur le fork
+          # Vérifie que la release Latest existe bien sur le fork
           LATEST_TARGET=$(
             get_target_release "$LATEST_TAG"
           )
