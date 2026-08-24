@@ -101,6 +101,28 @@ jobs:
           echo ""
 
           # ========================================================
+          # Récupération du VRAI Latest officiel
+          # ========================================================
+
+          echo "Récupération du Latest officiel..."
+
+          LATEST_TAG=$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/${SOURCE}/releases/latest" \
+              --jq '.tag_name'
+          )
+
+          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" = "null" ]; then
+            echo "ERREUR : impossible de récupérer le Latest officiel."
+            exit 1
+          fi
+
+          echo "Latest officiel : $LATEST_TAG"
+          echo ""
+
+          # ========================================================
           # Fonction : récupérer une release du fork
           # ========================================================
 
@@ -150,13 +172,6 @@ jobs:
             echo "Fichier    : $asset_file"
             echo "Upload URL : $upload_url"
             echo ""
-
-            # GitHub attend le fichier binaire directement.
-            # L'URL finale est :
-            #
-            # https://uploads.github.com/repos/OWNER/REPO/
-            # releases/RELEASE_ID/assets?name=FILE
-            #
 
             curl -fL \
               --retry 3 \
@@ -371,6 +386,40 @@ jobs:
             echo "Release synchronisée : $TAG"
 
           done
+
+          # ========================================================
+          # 3. FORCER LE LATEST À ÊTRE IDENTIQUE À L'OFFICIEL
+          # ========================================================
+
+          echo ""
+          echo "===================================="
+          echo "Synchronisation du Latest"
+          echo "===================================="
+          echo "Latest officiel : $LATEST_TAG"
+          echo ""
+
+          # Vérifie que la release existe bien sur le fork
+          LATEST_TARGET=$(
+            get_target_release "$LATEST_TAG"
+          )
+
+          if [ -z "$LATEST_TARGET" ] || \
+             ! echo "$LATEST_TARGET" |
+             jq -e '.databaseId != null' >/dev/null 2>&1; then
+
+            echo "ERREUR : la release Latest n'existe pas sur le dépôt cible."
+            echo "Tag : $LATEST_TAG"
+            exit 1
+          fi
+
+          echo "Marquage de $LATEST_TAG comme Latest..."
+
+          gh release edit "$LATEST_TAG" \
+            --repo "$TARGET" \
+            --latest
+
+          echo ""
+          echo "Latest synchronisé : $LATEST_TAG"
 
           # ========================================================
           # Nettoyage final
