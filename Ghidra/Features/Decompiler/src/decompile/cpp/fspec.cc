@@ -94,11 +94,9 @@ void ParamEntry::resolveFirst(list<ParamEntry> &curList)
 void ParamEntry::resolveJoin(list<ParamEntry> &curList)
 
 {
-  if (spaceid->getType() != IPTR_JOIN) {
-    joinrec = (JoinRecord *)0;
+  joinrec = spaceid->findJoin(addressbase);
+  if (joinrec == (JoinRecord *)0)
     return;
-  }
-  joinrec = spaceid->getManager()->findJoin(addressbase);
   groupSet.clear();
   for(int4 i=0;i<joinrec->numPieces();++i) {
     const ParamEntry *entry = findEntryByStorage(curList, joinrec->getPiece(i));
@@ -430,11 +428,12 @@ int4 ParamEntry::getSlot(const Address &addr,int4 skip) const
 /// \param slotnum is a reference to used slots (which will be updated)
 /// \param sz is the size of the parameter to allocated
 /// \param typeAlign is the required byte alignment for the parameter
+/// \param m is the space manager
 /// \return the address of the new parameter (or an invalid address)
-Address ParamEntry::getAddrBySlot(int4 &slotnum, int4 sz, int4 typeAlign) const
+Address ParamEntry::getAddrBySlot(int4 &slotnum, int4 sz, int4 typeAlign,const AddrSpaceManager *m) const
 
 {
-	return getAddrBySlot(slotnum, sz, typeAlign, !isLeftJustified());
+  return getAddrBySlot(slotnum, sz, typeAlign, !isLeftJustified(),m);
 }
 
 /// \brief Calculate the storage address assigned when allocating a parameter of a given size
@@ -446,8 +445,9 @@ Address ParamEntry::getAddrBySlot(int4 &slotnum, int4 sz, int4 typeAlign) const
 /// \param sz is the size of the parameter to allocated
 /// \param typeAlign is the required byte alignment for the parameter
 /// \param justifyRight is true if initial bytes are padding for odd data-type sizes
+/// \param m is the space manager
 /// \return the address of the new parameter (or an invalid address)
-Address ParamEntry::getAddrBySlot(int4 &slotnum,int4 sz,int4 typeAlign, bool justifyRight) const
+Address ParamEntry::getAddrBySlot(int4 &slotnum,int4 sz,int4 typeAlign, bool justifyRight,const AddrSpaceManager *m) const
 
 {
   Address res;			// Start with an invalid result
@@ -459,8 +459,7 @@ Address ParamEntry::getAddrBySlot(int4 &slotnum,int4 sz,int4 typeAlign, bool jus
     res = Address(spaceid,addressbase);	// Get base address of the slot
     spaceused = size;
     if (((flags & smallsize_floatext)!=0)&&(sz != size)) { // Do we have an implied floating-point extension
-      AddrSpaceManager *manager = spaceid->getManager();
-      res = manager->constructFloatExtensionAddress(res,size,sz);
+      res = m->constructFloatExtensionAddress(res,size,sz);
       return res;
     }
   }
@@ -604,6 +603,7 @@ ParamListStandard::ParamListStandard(const ParamListStandard &op2)
   thisbeforeret = op2.thisbeforeret;
   autoKilledByCall = op2.autoKilledByCall;
   resourceStart = op2.resourceStart;
+  glb = op2.glb;
   for(list<ModelRule>::const_iterator iter=op2.modelRules.begin();iter!=op2.modelRules.end();++iter) {
     modelRules.emplace_back(*iter,&op2);
   }
@@ -622,7 +622,6 @@ ParamListStandard::~ParamListStandard(void)
 
 /// \param tiles will contain the set of matching entries
 /// \param type is the storage class
-/// \return the first matching iterator
 void ParamListStandard::extractTiles(vector<const ParamEntry *> &tiles,type_class type) const
 
 {
@@ -745,7 +744,7 @@ uint4 ParamListStandard::assignAddressFallback(type_class resource,Datatype *tp,
 	continue;			// Wrong type
     }
 
-    param.addr = curEntry.getAddrBySlot(status[grp],tp->getAlignSize(),tp->getAlignment());
+    param.addr = curEntry.getAddrBySlot(status[grp],tp->getAlignSize(),tp->getAlignment(),glb);
     if (param.addr.isInvalid()) continue; // If -tp- doesn't fit an invalid address is returned
     if (curEntry.isExclusion()) {
       const vector<int4> &groupSet(curEntry.getAllGroups());
@@ -892,7 +891,7 @@ void ParamListStandard::buildTrialMap(ParamActive *active) const
 	continue;
       int4 sz = curentry->isExclusion() ? curentry->getSize() : curentry->getAlign();
       int4 nextslot = 0;
-      Address addr = curentry->getAddrBySlot(nextslot,sz,1);
+      Address addr = curentry->getAddrBySlot(nextslot,sz,1,glb);
       int4 trialpos = active->getNumTrials();
       active->registerTrial(addr,sz);
       ParamTrial &paramtrial(active->getTrial(trialpos));
@@ -923,7 +922,7 @@ void ParamListStandard::buildTrialMap(ParamActive *active) const
       for(int4 j=0;j<slotlist.size();++j) {
 	if (slotlist[j] == 0) {
 	  int4 nextslot = j;	// Make copy of j, so that getAddrBySlot can change it
-	  Address addr = curentry->getAddrBySlot(nextslot,curentry->getAlign(),1);
+	  Address addr = curentry->getAddrBySlot(nextslot,curentry->getAlign(),1,glb);
 	  int4 trialpos = active->getNumTrials();
 	  active->registerTrial(addr,curentry->getAlign());
 	  ParamTrial &paramtrial(active->getTrial(trialpos));
@@ -1451,6 +1450,7 @@ void ParamListStandard::getRangeList(AddrSpace *spc,RangeList &res) const
 void ParamListStandard::decode(Decoder &decoder,vector<EffectRecord> &effectlist,bool normalstack)
 
 {
+  glb = decoder.getAddrSpaceManager();
   numgroup = 0;
   spacebase = (AddrSpace *)0;
   int4 pointermax = 0;
@@ -1972,6 +1972,15 @@ void ParamActive::registerTrial(const Address &addr,int4 sz)
   // to get an efficient test
   if (addr.getSpace()->getType() != IPTR_SPACEBASE)
     trial.back().markKilledByCall();
+  slotbase += 1;
+}
+
+/// Copy the memory range of the trial and its boolean properties but assign a new slot.
+/// \param oldTrial is the trial to register
+void ParamActive::reregisterTrial(const ParamTrial &oldTrial)
+
+{
+  trial.emplace_back(oldTrial,slotbase);
   slotbase += 1;
 }
 
@@ -2633,7 +2642,7 @@ void ProtoModel::decode(Decoder &decoder)
       while(decoder.peekElement() != 0) {
         Range range;
         range.decode(decoder);
-        localrange.insertRange(range.getSpace(),range.getFirst(),range.getLast());
+        localrange.insertRange(range);
       }
       decoder.closeElement(subId);
     }
@@ -2643,7 +2652,7 @@ void ProtoModel::decode(Decoder &decoder)
       while(decoder.peekElement() != 0) {
         Range range;
         range.decode(decoder);
-        paramrange.insertRange(range.getSpace(),range.getFirst(),range.getLast());
+        paramrange.insertRange(range);
       }
       decoder.closeElement(subId);
     }
@@ -2853,9 +2862,9 @@ void ProtoModelMerged::foldIn(ProtoModel *model)
     // Take the union of the localrange and paramrange
     set<Range>::const_iterator iter;
     for(iter=model->localrange.begin();iter!=model->localrange.end();++iter)
-      localrange.insertRange((*iter).getSpace(),(*iter).getFirst(),(*iter).getLast());
+      localrange.insertRange(*iter);
     for(iter=model->paramrange.begin();iter!=model->paramrange.end();++iter)
-      paramrange.insertRange((*iter).getSpace(),(*iter).getFirst(),(*iter).getLast());
+      paramrange.insertRange(*iter);
   }
 }
 
@@ -4980,6 +4989,7 @@ int4 FuncCallSpecs::transferLockedInputParam(ProtoParameter *param)
     Address trialend = curtrial.getAddress() + (curtrial.getSize() - 1);
     if (trialend < lastaddr) continue;
     if (curtrial.isDefinitelyNotUsed()) return 0;	// Trial has already been stripped
+    curtrial.markUsed();	// Trial is definitely used, picked up by collectUnlockedTrials
     return curtrial.getSlot();
   }
   if (startaddr.getSpace()->getType() == IPTR_SPACEBASE)
@@ -4996,7 +5006,6 @@ int4 FuncCallSpecs::transferLockedInputParam(ProtoParameter *param)
 ///    - The Varnode properly contains the parameter
 /// \param param is the given paramter (return value)
 /// \param newoutput will hold any overlapping output Varnodes
-/// \return the matching PcodeOp or NULL
 void FuncCallSpecs::transferLockedOutputParam(ProtoParameter *param,vector<Varnode *> &newoutput)
 
 {
@@ -5070,6 +5079,23 @@ bool FuncCallSpecs::transferLockedOutput(vector<Varnode *> &newoutput,const Func
   return true;
 }
 
+/// \brief Put any trials that might represent a \e varargs parameter in the given container
+///
+/// For a \e locked and \e varargs prototype, collect trials that are not in the locked portion of the prototype.
+/// \param unlockedTrials will hold the collected trials
+void FuncCallSpecs::collectUnlockedTrials(vector<ParamTrial> &unlockedTrials)
+
+{
+  if (!isDotdotdot()) return;
+  for(int4 i=0;i<activeinput.getNumTrials();++i) {
+    const ParamTrial &trial(activeinput.getTrial(i));
+    if (trial.isUsed()) continue;	// Trials for locked slots are marked as used
+    int4 slot = trial.getSlot();
+    if (slot < 1 || slot >= op->numInput()) continue;
+    unlockedTrials.push_back(trial);
+  }
+}
+
 /// \brief Update input Varnodes to \b this CALL to reflect the formal input parameters
 ///
 /// The current input parameters must be locked and are presumably out of date
@@ -5085,6 +5111,8 @@ void FuncCallSpecs::commitNewInputs(Funcdata &data,vector<Varnode *> &newinput)
   if (!isInputLocked()) return;
   Varnode *stackref = getSpacebaseRelative();
   Varnode *placeholder = (Varnode *)0;
+  vector<ParamTrial> unlockedTrials;
+  collectUnlockedTrials(unlockedTrials);
   if (stackPlaceholderSlot>=0)
     placeholder = op->getIn(stackPlaceholderSlot);
   bool noplacehold = true;
@@ -5107,6 +5135,11 @@ void FuncCallSpecs::commitNewInputs(Funcdata &data,vector<Varnode *> &newinput)
       noplacehold = false;	// Only set this on the first parameter
       placeholder = (Varnode *)0;	// With a locked stack param, we don't need a placeholder
     }
+  }
+  for(int4 i=0;i<unlockedTrials.size();++i) {
+    Varnode *vn = op->getIn(unlockedTrials[i].getSlot());
+    newinput.push_back(vn);
+    activeinput.reregisterTrial(unlockedTrials[i]);
   }
   if (placeholder != (Varnode *)0) {		// If we still need a placeholder
     newinput.push_back(placeholder);		// Add it at end of parameters

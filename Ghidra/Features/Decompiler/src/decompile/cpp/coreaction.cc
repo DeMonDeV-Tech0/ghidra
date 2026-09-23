@@ -1150,6 +1150,7 @@ MapEntry *ActionConstantPtr::isPointer(AddrSpace *spc,Varnode *vn,PcodeOp *op,in
   }
 
   if (rampoint.isInvalid()) return (MapEntry *)0;
+  if (!rampoint.highPtrPossible(1)) return (MapEntry *)0;
     // Since we are looking for a global address
     // Assume it is address tied and use empty usepoint
   MapEntry *entry = data.getScopeLocal()->getParent()->queryContainer(rampoint,1,Address());
@@ -1514,18 +1515,19 @@ int4 ActionExtraPopSetup::apply(Funcdata &data)
   for(int4 i=0;i<data.numCalls();++i) {
     fc = data.getCallSpecs(i);
     if (fc->getExtraPop() == 0) continue; // Stack pointer is undisturbed
-    op = data.newOp(2,fc->getOp()->getAddr());
-    data.newVarnodeOut(sb_size,sb_addr,op);
-    data.opSetInput(op,data.newVarnode(sb_size,sb_addr),0);
     if (fc->getExtraPop() != ProtoModel::extrapop_unknown) { // We know exactly how stack pointer is changed
       fc->setEffectiveExtraPop(fc->getExtraPop());
+      op = data.newOp(2,fc->getOp()->getAddr());
+      data.newVarnodeOut(sb_size,sb_addr,op);
+      data.opSetInput(op,data.newVarnode(sb_size,sb_addr),0);
       data.opSetOpcode(op,CPUI_INT_ADD);
       data.opSetInput(op,data.newConstant(sb_size,fc->getExtraPop()),1);
       data.opInsertAfter(op,fc->getOp());
     }
     else {			// We don't know exactly, so we create INDIRECT
-      data.opSetOpcode(op,CPUI_INDIRECT);
-      data.opSetInput(op,data.newVarnodeIop(fc->getOp()),1);
+      op = data.newIndirect(fc->getOp());
+      data.newVarnodeOut(sb_size,sb_addr,op);
+      data.opSetInput(op,data.newVarnode(sb_size,sb_addr),0);
       data.opInsertBefore(op,fc->getOp());
     }
   }
@@ -5920,7 +5922,7 @@ void ActionDatabase::universalAction(Architecture *conf)
 	actprop->addRule( new RuleShift2Mult("analysis") );
 	actprop->addRule( new RuleShiftPiece("analysis") );
 	actprop->addRule( new RuleMultiCollapse("analysis") );
-	actprop->addRule( new RuleIndirectCollapse("analysis") );
+	actprop->addRule( new RuleAliasUpdate("analysis") );
 	actprop->addRule( new Rule2Comp2Mult("analysis") );
 	actprop->addRule( new RuleSub2Add("analysis") );
 	actprop->addRule( new RuleCarryElim("analysis") );
