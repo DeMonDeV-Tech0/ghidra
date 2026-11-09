@@ -24,7 +24,7 @@ import ghidra.program.model.lang.Language;
 import ghidra.trace.model.Trace;
 import ghidra.trace.model.thread.TraceThread;
 import ghidra.trace.model.thread.TraceThreadManager;
-import ghidra.trace.model.time.schedule.TraceSchedule.TimeRadix;
+import ghidra.util.Radix;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -39,7 +39,7 @@ public class Sequence implements Comparable<Sequence> {
 	 * 
 	 * <p>
 	 * This takes a semicolon-separated list of steps in the form specified by
-	 * {@link Step#parse(String, TimeRadix)}. Each step may or may not specify a thread, but it's
+	 * {@link Step#parse(String, Radix)}. Each step may or may not specify a thread, but it's
 	 * uncommon for any but the first step to omit the thread. The sequence is normalized as it is
 	 * parsed, so any step after the first that omits a thread will be combined with the previous
 	 * step. When the first step applies to the "last thread," it typically means the "event thread"
@@ -50,7 +50,7 @@ public class Sequence implements Comparable<Sequence> {
 	 * @return the parsed sequence
 	 * @throws IllegalArgumentException if the specification is of the wrong form
 	 */
-	public static Sequence parse(String seqSpec, TimeRadix radix) {
+	public static Sequence parse(String seqSpec, Radix radix) {
 		Sequence result = new Sequence();
 		for (String stepSpec : seqSpec.split(SEP)) {
 			Step step = Step.parse(stepSpec, radix);
@@ -109,10 +109,10 @@ public class Sequence implements Comparable<Sequence> {
 
 	@Override
 	public String toString() {
-		return toString(TimeRadix.DEFAULT);
+		return toString(Radix.DEFAULT);
 	}
 
-	public String toString(TimeRadix radix) {
+	public String toString(Radix radix) {
 		return steps.stream().map(s -> s.toString(radix)).collect(Collectors.joining(SEP));
 	}
 

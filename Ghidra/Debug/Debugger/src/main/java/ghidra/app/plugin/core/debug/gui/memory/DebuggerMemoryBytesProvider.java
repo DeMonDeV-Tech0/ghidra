@@ -28,12 +28,12 @@ import java.util.concurrent.*;
 
 import javax.swing.*;
 
-import docking.action.builder.ActionBuilder;
 import org.apache.commons.lang3.StringUtils;
 
 import docking.ActionContext;
 import docking.action.DockingAction;
 import docking.action.ToggleDockingAction;
+import docking.action.builder.ActionBuilder;
 import docking.menu.MultiStateDockingAction;
 import docking.widgets.fieldpanel.support.ViewerPosition;
 import generic.theme.GThemeDefaults.Colors;
@@ -66,6 +66,7 @@ import ghidra.trace.model.TraceDomainObjectListener;
 import ghidra.trace.model.program.TraceProgramView;
 import ghidra.trace.util.TraceEvents;
 import ghidra.util.Swing;
+import ghidra.util.datastruct.Counter;
 
 public class DebuggerMemoryBytesProvider extends ProgramByteViewerComponentProvider {
 	private static final AutoConfigState.ClassHandler<
@@ -184,7 +185,8 @@ public class DebuggerMemoryBytesProvider extends ProgramByteViewerComponentProvi
 			}
 
 			@Override
-			protected boolean hasEnoughSpace(Program program, Address address, int byteCount) {
+			protected boolean hasEnoughSpace(Program program, Address address, int byteCount,
+					Counter bytesAvailable) {
 				return doHasEnoughSpace(program, address, byteCount);
 			}
 
@@ -254,7 +256,7 @@ public class DebuggerMemoryBytesProvider extends ProgramByteViewerComponentProvi
 	// TODO: followsCurrentSnap?
 
 	private final ListenerForChanges listenerForChanges = new ListenerForChanges();
-	private final ControlModeChangeListener controlModeChangeListener = (trace, mode) -> {
+	private final ControlModeChangeListener controlModeChangeListener = (trace, _) -> {
 		if (trace == getCurrent().getTrace()) {
 			// for Paste action
 			contextChanged();
@@ -278,6 +280,7 @@ public class DebuggerMemoryBytesProvider extends ProgramByteViewerComponentProvi
 		autoServiceWiring = AutoService.wireServicesConsumed(plugin, this);
 		createActions();
 		addDisplayListener(readsMemTrait.getDisplayListener());
+		setEditMode(true);
 
 		JPanel northPanel = new JPanel(new BorderLayout());
 		northPanel.add(locationLabel);
@@ -533,13 +536,13 @@ public class DebuggerMemoryBytesProvider extends ProgramByteViewerComponentProvi
 					.buildAndInstallLocal(this);
 
 			actionConvertToStackView =
-					new ActionBuilder("Convert To Stack View", plugin.getName()).description(
-									"Convert current byte viewer into a stack view")
-							.enabled(true)
-							.menuPath("Convert To Stack View")
-							.menuGroup("aa")
-							.onAction(this::convertToStackViewActivated)
-							.buildAndInstallLocal(this);
+				new ActionBuilder("Convert To Stack View", plugin.getName()).description(
+					"Convert current byte viewer into a stack view")
+						.enabled(true)
+						.menuPath("Convert To Stack View")
+						.menuGroup("aa")
+						.onAction(this::convertToStackViewActivated)
+						.buildAndInstallLocal(this);
 		}
 
 		actionGoTo = goToTrait.installAction();
@@ -608,10 +611,15 @@ public class DebuggerMemoryBytesProvider extends ProgramByteViewerComponentProvi
 			current = coordinates;
 			return;
 		}
+		boolean doListeners = coordinates.getTrace() != current.getTrace();
 		previous = current;
-		removeOldListeners();
+		if (doListeners) {
+			removeOldListeners();
+		}
 		current = coordinates;
-		addNewListeners();
+		if (doListeners) {
+			addNewListeners();
+		}
 		doSetProgram(current.getView());
 		// NB. Also avoid a stale location being reported to the history service.
 		setLocation(null);
@@ -698,9 +706,9 @@ public class DebuggerMemoryBytesProvider extends ProgramByteViewerComponentProvi
 	}
 
 	protected void doGoToTracked() {
-		if (editModeAction.isSelected()) {
-			return;
-		}
+//		if (editModeAction.isSelected()) {
+//			return;
+//		}
 		ProgramLocation loc = trackingTrait.getTrackedLocation();
 		if (loc == null) {
 			return;
@@ -843,4 +851,10 @@ public class DebuggerMemoryBytesProvider extends ProgramByteViewerComponentProvi
 		options.setBytesPerLine(bytesPerLine);
 		updateConfigOptions(options, Set.of(hexColumn, "Chars"));
 	}
+
+	@Override
+	public boolean hasEditAction() {
+		return false;
+	}
+
 }

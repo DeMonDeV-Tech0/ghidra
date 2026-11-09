@@ -921,6 +921,7 @@ public class GhidraJarBuilder implements GhidraLaunchable {
 
 	private static void usage(String[] args) {
 		for (int i = 0; i < args.length; i++) {
+			// System use is acceptable as this is a console application
 			System.err.println("arg " + i + ": " + args[i]);
 		}
 		String invocationName = System.getProperty(INVOCATION_NAME_PROPERTY);

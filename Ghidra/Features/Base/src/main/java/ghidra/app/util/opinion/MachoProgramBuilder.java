@@ -264,7 +264,8 @@ public class MachoProgramBuilder {
 						segment.getSegmentName(), segment.getVMaddress(), segment.getVMsize()));
 				}
 				else {
-					segmentOverlayMap.put(segment.getSegmentName(), overlayBlock.getStart().getAddressSpace());
+					segmentOverlayMap.put(segment.getSegmentName(),
+						overlayBlock.getStart().getAddressSpace());
 					overlaySections.addAll(segment.getSections());
 				}
 			}
@@ -809,7 +810,7 @@ public class MachoProgramBuilder {
 
 		SymbolTable symbolTable = program.getSymbolTable();
 		Address imagebase = getMachoBaseAddress();
-		List<DyldFixup> fixups = new ArrayList<>();
+		Set<DyldFixup> fixups = new HashSet<>();
 
 		// First look for a DyldChainedFixupsCommand
 		List<DyldChainedFixupsCommand> loadCommands =
@@ -916,7 +917,7 @@ public class MachoProgramBuilder {
 			monitor.initialize(threadedBindings.size(), "Processing threaded bindings...");
 			for (Binding threadedBinding : threadedBindings) {
 				monitor.increment();
-				List<DyldFixup> fixups = DyldChainedFixups.getChainedFixups(reader,
+				Set<DyldFixup> fixups = DyldChainedFixups.getChainedFixups(reader,
 					chainedImports, DyldChainType.DYLD_CHAINED_PTR_ARM64E,
 					segments.get(threadedBinding.getSegmentIndex()).getFileOffset(),
 					threadedBinding.getSegmentOffset(), 0, imagebase.getOffset(),
@@ -1839,12 +1840,7 @@ public class MachoProgramBuilder {
 		ExternalLocation loc =
 			extManager.getUniqueExternalLocation(Library.UNKNOWN, symbol);
 		if (loc != null) {
-			try {
-				loc.setName(library, symbol, SourceType.IMPORTED);
-			}
-			catch (InvalidInputException e) {
-				throw new Exception(e.getMessage());
-			}
+			loc.setLibrary(library);
 		}
 	}
 }

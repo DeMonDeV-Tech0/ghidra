@@ -240,6 +240,7 @@ TypeOp::TypeOp(TypeFactory *t,OpCode opc,const string &n)
   opflags = 0;
   addlflags = 0;
   behave = (OpBehavior *)0;
+  booleanFlip = CPUI_MAX;
 }
 
 TypeOp::~TypeOp(void)
@@ -699,9 +700,6 @@ Datatype *TypeOpCall::getInputLocal(const PcodeOp *op,int4 slot) const
     
   // Get types of call input parameters
   fc = FuncCallSpecs::getFspecFromConst(vn->getAddr());
-  // Its false to assume that the parameter symbol corresponds
-  // to the varnode in the same slot, but this is easiest until
-  // we get giant sized parameters working properly
   ProtoParameter *param = fc->getParam(slot - 1);
   if (param != (ProtoParameter*) 0) {
     if (param->isTypeLocked()) {
@@ -929,6 +927,7 @@ TypeOpEqual::TypeOpEqual(TypeFactory *t)
   opflags = PcodeOp::binary | PcodeOp::booloutput | PcodeOp::commutative;
   addlflags = inherits_sign;
   behave = new OpBehaviorEqual();
+  booleanFlip = CPUI_INT_NOTEQUAL;
 }
 
 Datatype *TypeOpEqual::getInputCast(const PcodeOp *op,int4 slot,const CastStrategy *castStrategy) const
@@ -993,6 +992,7 @@ TypeOpNotEqual::TypeOpNotEqual(TypeFactory *t)
   opflags = PcodeOp::binary | PcodeOp::booloutput | PcodeOp::commutative;
   addlflags = inherits_sign;
   behave = new OpBehaviorNotEqual();
+  booleanFlip = CPUI_INT_EQUAL;
 }
 
 Datatype *TypeOpNotEqual::getInputCast(const PcodeOp *op,int4 slot,const CastStrategy *castStrategy) const
@@ -1018,8 +1018,9 @@ TypeOpIntSless::TypeOpIntSless(TypeFactory *t)
   : TypeOpBinary(t,CPUI_INT_SLESS,"<",TYPE_BOOL,TYPE_INT)
 {
   opflags = PcodeOp::binary | PcodeOp::booloutput;
-  addlflags = inherits_sign;
+  addlflags = inherits_sign | boolean_reorder;
   behave = new OpBehaviorIntSless();
+  booleanFlip = CPUI_INT_SLESSEQUAL;
 }
 
 void TypeOpIntSless::printRaw(ostream &s,const PcodeOp *op)
@@ -1054,8 +1055,9 @@ TypeOpIntSlessEqual::TypeOpIntSlessEqual(TypeFactory *t)
   : TypeOpBinary(t,CPUI_INT_SLESSEQUAL,"<=",TYPE_BOOL,TYPE_INT)
 {
   opflags = PcodeOp::binary | PcodeOp::booloutput;
-  addlflags = inherits_sign;
+  addlflags = inherits_sign | boolean_reorder;
   behave = new OpBehaviorIntSlessEqual();
+  booleanFlip = CPUI_INT_SLESS;
 }
 
 void TypeOpIntSlessEqual::printRaw(ostream &s,const PcodeOp *op)
@@ -1090,8 +1092,9 @@ TypeOpIntLess::TypeOpIntLess(TypeFactory *t)
   : TypeOpBinary(t,CPUI_INT_LESS,"<",TYPE_BOOL,TYPE_UINT)
 {
   opflags = PcodeOp::binary | PcodeOp::booloutput;
-  addlflags = inherits_sign;
+  addlflags = inherits_sign | boolean_reorder;
   behave = new OpBehaviorIntLess();
+  booleanFlip = CPUI_INT_LESSEQUAL;
 }
 
 Datatype *TypeOpIntLess::getInputCast(const PcodeOp *op,int4 slot,const CastStrategy *castStrategy) const
@@ -1114,8 +1117,9 @@ TypeOpIntLessEqual::TypeOpIntLessEqual(TypeFactory *t)
   : TypeOpBinary(t,CPUI_INT_LESSEQUAL,"<=",TYPE_BOOL,TYPE_UINT)
 {
   opflags = PcodeOp::binary | PcodeOp::booloutput;
-  addlflags = inherits_sign;
+  addlflags = inherits_sign | boolean_reorder;
   behave = new OpBehaviorIntLessEqual();
+  booleanFlip = CPUI_INT_LESS;
 }
 
 Datatype *TypeOpIntLessEqual::getInputCast(const PcodeOp *op,int4 slot,const CastStrategy *castStrategy) const
@@ -1756,6 +1760,7 @@ TypeOpBoolNegate::TypeOpBoolNegate(TypeFactory *t)
   opflags = PcodeOp::unary | PcodeOp::booloutput;
   addlflags = logical_op;
   behave = new OpBehaviorBoolNegate();
+  booleanFlip = CPUI_COPY;
 }
 
 TypeOpBoolXor::TypeOpBoolXor(TypeFactory *t)
@@ -1788,6 +1793,7 @@ TypeOpFloatEqual::TypeOpFloatEqual(TypeFactory *t,const Translate *trans)
   opflags = PcodeOp::binary | PcodeOp::booloutput | PcodeOp::commutative;
   addlflags = floatingpoint_op;
   behave = new OpBehaviorFloatEqual(trans);
+  booleanFlip = CPUI_FLOAT_NOTEQUAL;
 }
 
 void TypeOpFloatEqual::printRaw(ostream &s,const PcodeOp *op)
@@ -1806,6 +1812,7 @@ TypeOpFloatNotEqual::TypeOpFloatNotEqual(TypeFactory *t,const Translate *trans)
   opflags = PcodeOp::binary | PcodeOp::booloutput | PcodeOp::commutative;
   addlflags = floatingpoint_op;
   behave = new OpBehaviorFloatNotEqual(trans);
+  booleanFlip = CPUI_FLOAT_EQUAL;
 }
 
 void TypeOpFloatNotEqual::printRaw(ostream &s,const PcodeOp *op)
@@ -1822,8 +1829,9 @@ TypeOpFloatLess::TypeOpFloatLess(TypeFactory *t,const Translate *trans)
   : TypeOpBinary(t,CPUI_FLOAT_LESS,"<",TYPE_BOOL,TYPE_FLOAT)
 {
   opflags = PcodeOp::binary | PcodeOp::booloutput;
-  addlflags = floatingpoint_op;
+  addlflags = floatingpoint_op | boolean_reorder;
   behave = new OpBehaviorFloatLess(trans);
+  booleanFlip = CPUI_FLOAT_LESSEQUAL;
 }
 
 void TypeOpFloatLess::printRaw(ostream &s,const PcodeOp *op)
@@ -1840,8 +1848,9 @@ TypeOpFloatLessEqual::TypeOpFloatLessEqual(TypeFactory *t,const Translate *trans
   : TypeOpBinary(t,CPUI_FLOAT_LESSEQUAL,"<=",TYPE_BOOL,TYPE_FLOAT)
 {
   opflags = PcodeOp::binary | PcodeOp::booloutput;
-  addlflags = floatingpoint_op;
+  addlflags = floatingpoint_op | boolean_reorder;
   behave = new OpBehaviorFloatLessEqual(trans);
+  booleanFlip = CPUI_FLOAT_LESS;
 }
 
 void TypeOpFloatLessEqual::printRaw(ostream &s,const PcodeOp *op)

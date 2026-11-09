@@ -48,11 +48,6 @@ class GhidraClassDB implements GhidraClass {
 		return symbol;
 	}
 
-	@Override
-	public boolean isExternal() {
-		return symbol.isExternal();
-	}
-
 	/**
 	 * @see ghidra.program.model.symbol.Namespace#getName()
 	 */
@@ -104,6 +99,11 @@ class GhidraClassDB implements GhidraClass {
 	@Override
 	public String getName(boolean includeNamespacePath) {
 		return symbol.getName(includeNamespacePath);
+	}
+
+	@Override
+	public int hashCode() {
+		return symbol.hashCode();
 	}
 
 	/**

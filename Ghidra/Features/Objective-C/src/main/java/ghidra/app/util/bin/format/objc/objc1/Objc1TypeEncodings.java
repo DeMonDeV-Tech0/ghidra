@@ -39,6 +39,8 @@ public final class Objc1TypeEncodings {
 	public final static char _C_ULNG = 'L';
 	public final static char _C_LNG_LNG = 'q';
 	public final static char _C_ULNG_LNG = 'Q';
+	public final static char _C_INT128 = 't';
+	public final static char _C_UINT128 = 'T';
 	public final static char _C_FLT = 'f';
 	public final static char _C_DBL = 'd';
 	public final static char _C_BOOL = 'B';
@@ -277,11 +279,11 @@ public final class Objc1TypeEncodings {
 			}
 			case _C_LNG: {
 				buffer.deleteCharAt(0);
-				return new TypedefDataType("long", new QWordDataType());
+				return new TypedefDataType("long", new DWordDataType());
 			}
 			case _C_ULNG: {
 				buffer.deleteCharAt(0);
-				return new TypedefDataType("unsigned long", new QWordDataType());
+				return new TypedefDataType("unsigned long", new DWordDataType());
 			}
 			case _C_LNG_LNG: {
 				buffer.deleteCharAt(0);
@@ -290,6 +292,14 @@ public final class Objc1TypeEncodings {
 			case _C_ULNG_LNG: {
 				buffer.deleteCharAt(0);
 				return new TypedefDataType("unsigned long long", new QWordDataType());
+			}
+			case _C_INT128: {
+				buffer.deleteCharAt(0);
+				return new Integer16DataType();
+			}
+			case _C_UINT128: {
+				buffer.deleteCharAt(0);
+				return new UnsignedInteger16DataType();
 			}
 			case _C_FLT: {
 				buffer.deleteCharAt(0);
@@ -301,7 +311,7 @@ public final class Objc1TypeEncodings {
 			}
 			case _C_BOOL: {
 				buffer.deleteCharAt(0);
-				return new TypedefDataType("bool", new DWordDataType());
+				return new TypedefDataType("bool", new BooleanDataType());
 			}
 			case _C_VOID: {
 				buffer.deleteCharAt(0);

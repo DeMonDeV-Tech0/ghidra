@@ -26,6 +26,7 @@ public class JShellRun implements GhidraLaunchable {
 	@Override
 	public void launch(GhidraApplicationLayout layout, String[] args) throws Exception {
 		if (Stream.of(args).anyMatch(a -> a.startsWith("--execution"))) {
+			// System use is acceptable as logging is not yet initialized
 			System.err.println("Ignoring --execution option. Overridden to local");
 		}
 

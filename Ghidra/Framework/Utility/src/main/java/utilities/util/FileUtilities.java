@@ -44,7 +44,7 @@ public final class FileUtilities {
 	private static final ThreadLocal<NumberFormat> SIZE_FORMAT_THREAD_LOCAL =
 		ThreadLocal.withInitial(() -> new DecimalFormat("#,###,###.##"));
 
-	private static final FileFilter ACCEPT_ALL_FILE_FILTER = pathname -> true;
+	private static final FileFilter ACCEPT_ALL_FILE_FILTER = _ -> true;
 
 	private FileUtilities() {
 		// utils class; can't create
@@ -99,10 +99,13 @@ public final class FileUtilities {
 
 	/**
 	 * Return an array of bytes read from the given file.
+	 * 
 	 * @param sourceFile the source file
 	 * @return the bytes
 	 * @throws IOException if the file could not be accessed
+	 * @deprecated Use {@link Files#readAllBytes(Path)} instead
 	 */
+	@Deprecated(forRemoval = true, since = "12.3")
 	public final static byte[] getBytesFromFile(File sourceFile) throws IOException {
 		return getBytesFromFile(new ResourceFile(sourceFile));
 	}
@@ -127,7 +130,10 @@ public final class FileUtilities {
 	 * @param sourceFile the source file
 	 * @return the bytes
 	 * @throws IOException if the file could not be accessed
+	 * @deprecated Use {@link Files#readAllBytes(Path)} instead if a normal File, or 
+	 * {@link InputStream#readAllBytes()} if a ResourceFile.
 	 */
+	@Deprecated(forRemoval = true, since = "12.3")
 	public final static byte[] getBytesFromFile(ResourceFile sourceFile) throws IOException {
 		long fileLen = sourceFile.length();
 		return getBytesFromFile(sourceFile, 0, fileLen);
@@ -139,7 +145,9 @@ public final class FileUtilities {
 	 * @param bytes the array of bytes to write
 	 * @throws FileNotFoundException thrown if the file path is invalid
 	 * @throws IOException thrown if the file can't be written to.
+	 * @deprecated use {@link Files#write(Path, byte[], OpenOption...)} instead
 	 */
+	@Deprecated(since = "12.3", forRemoval = true)
 	public static void writeBytes(File file, byte[] bytes)
 			throws FileNotFoundException, IOException {
 		try (OutputStream os = new FileOutputStream(file)) {
@@ -167,16 +175,13 @@ public final class FileUtilities {
 			throw new IllegalArgumentException(
 				"offset[" + offset + "] and length[" + length + "] must be greater than 0");
 		}
-		byte[] data = new byte[(int) length];
 
 		try (InputStream fis = sourceFile.getInputStream()) {
-			if (fis.skip(offset) != offset) {
-				throw new IOException("Did not skip to the specified offset!");
-			}
-			int n = fis.read(data);
-			if (n != length) {
+			fis.skipNBytes(offset);
+			byte[] data = fis.readNBytes((int) length);
+			if (data.length != length) {
 				throw new IOException("Did not read expected number of bytes! Expected " + length +
-					", but read " + n);
+					", but read " + data.length);
 			}
 			return data;
 		}
@@ -187,7 +192,9 @@ public final class FileUtilities {
 	 * @param is the input stream to read
 	 * @return a byte[] containing the bytes from the stream.
 	 * @throws IOException if an I/O error occurs reading
+	 * @deprecated Use {@link InputStream#readAllBytes()} instead
 	 */
+	@Deprecated(forRemoval = true, since = "12.3")
 	public static byte[] getBytesFromStream(InputStream is) throws IOException {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		byte[] bytes = new byte[4096];
@@ -205,7 +212,9 @@ public final class FileUtilities {
 	 * @param expectedLength the number of bytes to be read
 	 * @return an array of bytes, that is the expectedLength, that was read from the stream.
 	 * @throws IOException if the "expectedLength" number of bytes can't be read from the input stream.
+	 * @deprecated Use {@link InputStream#readAllBytes()} instead
 	 */
+	@Deprecated(forRemoval = true, since = "12.3")
 	public static byte[] getBytesFromStream(InputStream inputStream, int expectedLength)
 			throws IOException {
 		byte[] buf = new byte[expectedLength];
@@ -229,6 +238,9 @@ public final class FileUtilities {
 
 	/**
 	 * Copy the fromFile contents to the toFile.  The toFile will be overwritten or created.
+	 * <p>
+	 * Consider using {@link Files#copy(Path, Path, CopyOption...)} instead if you do not need a
+	 * TaskMonitor to control the copy operation.
 	 *
 	 * @param fromFile source file
 	 * @param toFile destination file
@@ -244,7 +256,7 @@ public final class FileUtilities {
 
 		try (FileInputStream fin = new FileInputStream(fromFile)) {
 			if (monitor != null) {
-				monitor.initialize((int) fromFile.length());
+				monitor.initialize(fromFile.length());
 			}
 			return copyStreamToFile(fin, toFile, append, monitor);
 		}
@@ -266,7 +278,7 @@ public final class FileUtilities {
 
 		try (InputStream fin = fromFile.getInputStream()) {
 			if (monitor != null) {
-				monitor.initialize((int) fromFile.length());
+				monitor.initialize(fromFile.length());
 			}
 			copyStreamToFile(fin, toFile, append, monitor);
 		}
@@ -288,7 +300,7 @@ public final class FileUtilities {
 				OutputStream out = toFile.getOutputStream()) {
 
 			if (monitor != null) {
-				monitor.initialize((int) fromFile.length());
+				monitor.initialize(fromFile.length());
 			}
 			copyStreamToStream(fin, out, monitor);
 		}
@@ -454,6 +466,10 @@ public final class FileUtilities {
 	 * @throws CancelledException if the operation is cancelled
 	 */
 	public final static boolean deleteDir(File dir, TaskMonitor monitor) throws CancelledException {
+		if (Files.isSymbolicLink(dir.toPath())) {
+			return dir.delete();
+		}
+
 		File[] files = dir.listFiles();
 		if (files == null) {
 			return dir.delete();
@@ -463,7 +479,7 @@ public final class FileUtilities {
 
 		for (int i = 0; i < files.length; i++) {
 			monitor.checkCancelled();
-			if (files[i].isDirectory()) {
+			if (files[i].isDirectory() && !Files.isSymbolicLink(files[i].toPath())) {
 				// use a dummy monitor as not to ruin our progress
 				if (!doDeleteDir(files[i], monitor)) {
 					printDebug("Unable to delete directory: " + files[i]);
@@ -498,7 +514,7 @@ public final class FileUtilities {
 
 		for (File file : files) {
 			monitor.checkCancelled();
-			if (file.isDirectory()) {
+			if (file.isDirectory() && !Files.isSymbolicLink(file.toPath())) {
 				// use a dummy monitor as not to ruin our progress
 				if (!doDeleteDir(file, monitor)) {
 					printDebug("Unable to delete directory: " + file);
@@ -661,7 +677,7 @@ public final class FileUtilities {
 
 		try (InputStream fin = new FileInputStream(fromFile)) {
 			if (monitor != null) {
-				monitor.initialize((int) fromFile.length());
+				monitor.initialize(fromFile.length());
 			}
 			copyStreamToStream(fin, out, monitor);
 		}
